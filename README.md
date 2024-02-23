@@ -1,0 +1,2 @@
+# Filtro complementario basado en cuaterniones
+Estima la pose (*attitude* en inglés) utilizando un sensor de medida inercial (IMU) de 6 o 9 grado de libertad, ya sea que incluya el magnetómetro o no. El código del filtro se obtuvo del trabajo publicado por *Roberto G. Valenti*, *Ivan Dryanovski* y *Jizhon Xiao* en el artículo *Keeping a Good Attitude: A Quaternion-Based Orientation Filter for IMUs and MARGs*. Lo adaptaré para utilizarlo con el IMU de una cámara Intel Realsense modelo D435i. 
