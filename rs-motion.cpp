@@ -1,9 +1,9 @@
 // License: Apache 2.0. See LICENSE file in root directory.
 // Copyright(c) 2019 Intel Corporation. All Rights Reserved.
+#include "example.hpp" // Include short list of convenience functions for rendering
+#include <cstring>
 #include <librealsense2/rs.hpp>
 #include <mutex>
-#include "example.hpp"          // Include short list of convenience functions for rendering
-#include <cstring>
 
 struct short3
 {
@@ -17,9 +17,15 @@ void draw_axes()
     glLineWidth(2);
     glBegin(GL_LINES);
     // Draw x, y, z axes
-    glColor3f(1, 0, 0); glVertex3f(0, 0, 0);  glVertex3f(-1, 0, 0);
-    glColor3f(0, 1, 0); glVertex3f(0, 0, 0);  glVertex3f(0, -1, 0);
-    glColor3f(0, 0, 1); glVertex3f(0, 0, 0);  glVertex3f(0, 0, 1);
+    glColor3f(1, 0, 0);
+    glVertex3f(0, 0, 0);
+    glVertex3f(-1, 0, 0);
+    glColor3f(0, 1, 0);
+    glVertex3f(0, 0, 0);
+    glVertex3f(0, -1, 0);
+    glColor3f(0, 0, 1);
+    glVertex3f(0, 0, 0);
+    glVertex3f(0, 0, 1);
     glEnd();
 
     glLineWidth(1);
@@ -55,7 +61,7 @@ void render_scene(glfw_state app_state)
     glLoadIdentity();
     gluLookAt(1, 0, 5, 1, 0, 0, 0, -1, 0);
 
-    glTranslatef(0, 0, +0.5f + app_state.offset_y*0.05f);
+    glTranslatef(0, 0, +0.5f + app_state.offset_y * 0.05f);
     glRotated(app_state.pitch, -1, 0, 0);
     glRotated(app_state.yaw, 0, 1, 0);
     draw_floor();
@@ -65,7 +71,8 @@ class camera_renderer
 {
     std::vector<float3> positions, normals;
     std::vector<short3> indexes;
-public:
+
+  public:
     // Initialize renderer with data needed to draw the camera
     camera_renderer()
     {
@@ -92,7 +99,7 @@ public:
 
         glBegin(GL_TRIANGLES);
         // Draw the camera
-        for (auto& i : indexes)
+        for (auto &i : indexes)
         {
             glVertex3fv(&positions[i.x].x);
             glVertex3fv(&positions[i.y].x);
@@ -106,7 +113,6 @@ public:
         glDisable(GL_BLEND);
         glFlush();
     }
-
 };
 
 class rotation_estimator
@@ -114,14 +120,16 @@ class rotation_estimator
     // theta is the angle of camera rotation in x, y and z components
     float3 theta;
     std::mutex theta_mtx;
-    /* alpha indicates the part that gyro and accelerometer take in computation of theta; higher alpha gives more weight to gyro, but too high
-    values cause drift; lower alpha gives more weight to accelerometer, which is more sensitive to disturbances */
+    /* alpha indicates the part that gyro and accelerometer take in computation of theta; higher alpha gives more weight
+    to gyro, but too high values cause drift; lower alpha gives more weight to accelerometer, which is more sensitive to
+    disturbances */
     float alpha = 0.98f;
     bool firstGyro = true;
     bool firstAccel = true;
     // Keeps the arrival time of previous gyro frame
     double last_ts_gyro = 0;
-public:
+
+  public:
     // Function to calculate the change in angle of motion based on data from gyro
     void process_gyro(rs2_vector gyro_data, double ts)
     {
@@ -160,28 +168,31 @@ public:
         accel_angle.z = atan2(accel_data.y, accel_data.z);
         accel_angle.x = atan2(accel_data.x, sqrt(accel_data.y * accel_data.y + accel_data.z * accel_data.z));
 
-        // If it is the first iteration, set initial pose of camera according to accelerometer data (note the different handling for Y axis)
+        // If it is the first iteration, set initial pose of camera according to accelerometer data (note the different
+        // handling for Y axis)
         std::lock_guard<std::mutex> lock(theta_mtx);
         if (firstAccel)
         {
             firstAccel = false;
             theta = accel_angle;
-            // Since we can't infer the angle around Y axis using accelerometer data, we'll use PI as a convetion for the initial pose
+            // Since we can't infer the angle around Y axis using accelerometer data, we'll use PI as a convetion for
+            // the initial pose
             theta.y = PI_FL;
         }
         else
         {
-            /* 
+            /*
             Apply Complementary Filter:
-                - high-pass filter = theta * alpha:  allows short-duration signals to pass through while filtering out signals
-                  that are steady over time, is used to cancel out drift.
-                - low-pass filter = accel * (1- alpha): lets through long term changes, filtering out short term fluctuations 
+                - high-pass filter = theta * alpha:  allows short-duration signals to pass through while filtering out
+            signals that are steady over time, is used to cancel out drift.
+                - low-pass filter = accel * (1- alpha): lets through long term changes, filtering out short term
+            fluctuations
             */
             theta.x = theta.x * alpha + accel_angle.x * (1 - alpha);
             theta.z = theta.z * alpha + accel_angle.z * (1 - alpha);
         }
     }
-    
+
     // Returns the current rotation angle
     float3 get_theta()
     {
@@ -189,7 +200,6 @@ public:
         return theta;
     }
 };
-
 
 bool check_imu_is_supported()
 {
@@ -218,7 +228,8 @@ bool check_imu_is_supported()
     return found_gyro && found_accel;
 }
 
-int main(int argc, char * argv[]) try
+int main(int argc, char *argv[])
+try
 {
     // Before running the example, check that a device supporting IMU is connected
     if (!check_imu_is_supported())
@@ -250,12 +261,12 @@ int main(int argc, char * argv[]) try
 
     // Start streaming with the given configuration;
     // Note that since we only allow IMU streams, only single frames are produced
-    auto profile = pipe.start(cfg, [&](rs2::frame frame)
-    {
+    auto profile = pipe.start(cfg, [&](rs2::frame frame) {
         // Cast the frame that arrived to motion frame
         auto motion = frame.as<rs2::motion_frame>();
         // If casting succeeded and the arrived frame is from gyro stream
-        if (motion && motion.get_profile().stream_type() == RS2_STREAM_GYRO && motion.get_profile().format() == RS2_FORMAT_MOTION_XYZ32F)
+        if (motion && motion.get_profile().stream_type() == RS2_STREAM_GYRO &&
+            motion.get_profile().format() == RS2_FORMAT_MOTION_XYZ32F)
         {
             // Get the timestamp of the current frame
             double ts = motion.get_timestamp();
@@ -265,7 +276,8 @@ int main(int argc, char * argv[]) try
             algo.process_gyro(gyro_data, ts);
         }
         // If casting succeeded and the arrived frame is from accelerometer stream
-        if (motion && motion.get_profile().stream_type() == RS2_STREAM_ACCEL && motion.get_profile().format() == RS2_FORMAT_MOTION_XYZ32F)
+        if (motion && motion.get_profile().stream_type() == RS2_STREAM_ACCEL &&
+            motion.get_profile().format() == RS2_FORMAT_MOTION_XYZ32F)
         {
             // Get accelerometer measures
             rs2_vector accel_data = motion.get_motion_data();
@@ -287,12 +299,13 @@ int main(int argc, char * argv[]) try
 
     return EXIT_SUCCESS;
 }
-catch (const rs2::error & e)
+catch (const rs2::error &e)
 {
-    std::cerr << "RealSense error calling " << e.get_failed_function() << "(" << e.get_failed_args() << "):\n    " << e.what() << std::endl;
+    std::cerr << "RealSense error calling " << e.get_failed_function() << "(" << e.get_failed_args() << "):\n    "
+              << e.what() << std::endl;
     return EXIT_FAILURE;
 }
-catch (const std::exception& e)
+catch (const std::exception &e)
 {
     std::cerr << e.what() << std::endl;
     return EXIT_FAILURE;
