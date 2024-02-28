@@ -14,7 +14,8 @@ Realsense D435i.
 const int ACCEL_FPS = 250; // 63 o 250 Hz
 const int GYRO_FPS = 400;  // 200 o 400 Hz
 
-const double ACCEL_DT = 1.0 / ACCEL_FPS;
+// TODO: Calcular DT durante cada iteración
+const double GYRO_DT = 1.0 / GYRO_FPS; // Solo para fines de testeo, se necesita calcular con motion.get_timestamp()
 
 int main()
 try
@@ -23,6 +24,11 @@ try
 
     // Filtro complementario
     imu_tools::ComplementaryFilter CF;
+    rs2_vector gyro_data, accel_data;
+    bool firstIteration = true;
+    double dt_init = 0.0;
+    // Cuaternión de rotación
+    double q0, q1, q2, q3;
 
     // Realsense IMU config
     rs2::config cfg;
@@ -45,23 +51,31 @@ try
         if (motion && motion.get_profile().stream_type() == RS2_STREAM_GYRO &&
             motion.get_profile().format() == RS2_FORMAT_MOTION_XYZ32F)
         {
-            rs2_vector gyro_data = motion.get_motion_data();
-            std::cout << "Giroscopio: (" << gyro_data.x << ", " << gyro_data.y << ", " << gyro_data.z << ")" << std::endl;
+            // double ts = motion.get_timestamp();  // Unix time
+            gyro_data = motion.get_motion_data();
+            // std::cout << "Giroscopio: (" << gyro_data.x << ", " << gyro_data.y << ", " << gyro_data.z << ")"
+            //           << std::endl;
         }
         // Acelerómetro
         if (motion && motion.get_profile().stream_type() == RS2_STREAM_ACCEL &&
             motion.get_profile().format() == RS2_FORMAT_MOTION_XYZ32F)
         {
-            rs2_vector accel_data = motion.get_motion_data();
-            std::cout << "Acelerómetro: (" << accel_data.x << ", " << accel_data.y << ", " << accel_data.z << ")" << std::endl;
+            accel_data = motion.get_motion_data();
+            // std::cout << "Acelerómetro: (" << accel_data.x << ", " << accel_data.y << ", " << accel_data.z << ")"
+            //           << std::endl;
         }
     });
-    
+
     while (true)
     {
-        //
+        // Actualización del filtro complementario
+        CF.update(accel_data.x, accel_data.y, accel_data.z, gyro_data.x, gyro_data.y, gyro_data.z, GYRO_DT);
+        // Cuaternión resultante
+        CF.getOrientation(q0, q1, q2, q3);
+
+        std::cout << "Cuaternión: (" << q0 << ", " << q1 << ", " << q2 << ", " << q3 << ")" << std::endl;
     }
-    
+
     // Paramos el pipeline RS2
     pipe.stop();
 
