@@ -11,6 +11,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 # Find RealSense2 lib
 find_package(realsense2 REQUIRED)
 
+# Find Eigen
+find_package(Eigen3 REQUIRED)
+
 # Complementary Filter Lib config
 set(LIB_SOURCE_DIR complementary_filter/src)
 set(LIB_INCLUDE_DIR complementary_filter/include)
@@ -29,4 +32,14 @@ set(MAIN_SRCS src/main.cpp)
 add_executable(${PROJECT_NAME} ${MAIN_SRCS})
 
 # Link libraries to the target
-target_link_libraries(${PROJECT_NAME} ${realsense2_LIBRARY} complementary_filter_LIBRARY) 
+target_link_libraries(${PROJECT_NAME} ${realsense2_LIBRARY} complementary_filter_LIBRARY Eigen3) 
+
+# Warnings
+# target_compile_options(${PROJECT_NAME} PRIVATE
+#         -Wall
+#         -Wextra
+#         -Wpedantic
+#         -Werror
+#         -Wconversion
+#         -Wsign-conversion
+# )
