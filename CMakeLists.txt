@@ -13,6 +13,7 @@ find_package(realsense2 REQUIRED)
 
 # Find Eigen
 find_package(Eigen3 REQUIRED)
+include_directories(${EIGEN3_INCLUDE_DIR})
 
 # Complementary Filter Lib config
 set(LIB_SOURCE_DIR complementary_filter/src)
@@ -32,7 +33,7 @@ set(MAIN_SRCS src/main.cpp)
 add_executable(${PROJECT_NAME} ${MAIN_SRCS})
 
 # Link libraries to the target
-target_link_libraries(${PROJECT_NAME} ${realsense2_LIBRARY} complementary_filter_LIBRARY Eigen3) 
+target_link_libraries(${PROJECT_NAME} ${realsense2_LIBRARY} complementary_filter_LIBRARY Eigen3::Eigen) 
 
 # Warnings
 # target_compile_options(${PROJECT_NAME} PRIVATE
