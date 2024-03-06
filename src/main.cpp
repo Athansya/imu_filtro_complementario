@@ -62,7 +62,8 @@ try
 
     // Vectores
     Eigen::Vector3d vectorAccel(0.0, 0.0, 0.0);
-    Eigen::Vector3d vectorGravity(0.0, 0.0, GRAVITY); // Verificar dónde actúa la gravedad en el sensor
+    Eigen::Vector3d vectorGravity(0.0, GRAVITY, 0.0); // Verificar dónde actúa la gravedad en el sensor
+    Eigen::Vector3d vectorAccelRel(0.0, 0.0, 0.0);
 
     // Realsense IMU config
     rs2::config cfg;
@@ -104,12 +105,22 @@ try
         }
     });
 
+    // int iteration = 0;
+    // while (iteration < 5)
+    //     iteration++;
+    
     int iteration = 0;
-    while (iteration < 5)
-    // while (true)
+    // while (iteration < 5)
+    while (true)
     {
+        if (iteration < 10)
+        {
+            iteration++;
+            continue;
+        }
+
         // TODO: Arreglar tiempo inicialización del sensor
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        // std::this_thread::sleep_for(std::chrono::seconds(5));
         // Actualización del filtro complementario
         std::lock_guard<std::mutex> lock(filter_mutex);
         CF.update(accel_data.x, accel_data.y, accel_data.z, gyro_data.x, gyro_data.y, gyro_data.z, GYRO_DT);
@@ -117,8 +128,8 @@ try
         // Cuaternión resultante
         CF.getOrientation(q1, q1, q2, q3);
         quaternionRotCF.w() = q0;
-        quaternionRotCF.x() = q1;
-        quaternionRotCF.y() = q2;
+        quaternionRotCF.x() = q1;  
+        quaternionRotCF.y() = q2; 
         quaternionRotCF.z() = q3;
 // 
         // std::cout << "Cuaternión v1: (" << q0 << ", " << q1 << ", " << q2 << ", " << q3 << ")" << std::endl;
@@ -132,8 +143,9 @@ try
         std::cout << "Cuaternión conjugado de rotación: \n" << quaternionRotCFConj << std::endl;
 // 
         // Cuaternión puro aceleración
-        std::cout << "Aceleración sensor: \n" << "(" << accel_data.x << "," << accel_data.y << "," << accel_data.z
-        << ")" << std::endl; quaternionPureAccel.w() = 0; quaternionPureAccel.x() = accel_data.x;
+        std::cout << "Cuaternión puro de aceleración del sensor: \n" << "(" << accel_data.x << "," << accel_data.y << "," << accel_data.z
+        << ")" << std::endl; quaternionPureAccel.w() = 0;
+        quaternionPureAccel.x() = accel_data.x;
         quaternionPureAccel.y() = accel_data.y;
         quaternionPureAccel.z() = accel_data.z;
 // 
@@ -144,11 +156,12 @@ try
         quaternionAccel = quaternionRotCF * quaternionPureAccel * quaternionRotCFConj;
         vectorAccel << quaternionAccel.x(), quaternionAccel.y(), quaternionAccel.z();
 // 
-        std::cout << "Vector aceleración:\n" << vectorAccel << "\n" << std::endl;
+        std::cout << "Vector aceleración:\n" << vectorAccel << std::endl;
 // 
         // Cuaternión aceleración relativa
-        // quaternionAccelRel = quaternionAccel - G
-        // quaternionAccelRel = quaternionAccel - gravityVector;
+        vectorAccelRel = vectorAccel - vectorGravity;
+        std::cout << "Vector aceleración relativa:\n" << vectorAccelRel << "\n" << std::endl;
+// 
         // G = [0 0 g]^T
 
         // Guardamos valores cuaternion
@@ -168,7 +181,6 @@ try
 
         // Calculamos posición
 
-        iteration++;
     }
 
     // Cerramos archivo
