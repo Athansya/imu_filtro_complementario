@@ -6,6 +6,7 @@ Realsense D435i.
 */
 
 #include "complementary_filter.h"
+#include <rplidar.h>
 // #include <fstream>  // Descomentar lineas texto
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
@@ -13,9 +14,15 @@ Realsense D435i.
 #include <iostream>
 #include <librealsense2/rs.hpp>
 #include <mutex>
+#include <numeric>
 #include <thread>
-#include <vector>
 // TODO: Convertir a vectores de Eigen
+
+#ifndef _countof
+#define _countof(_Array) (int)(sizeof(_Array) / sizeof(_Array[0]))
+#endif
+
+using namespace rp::standalone::rplidar; // Vaya nombrecito
 
 // Frecuencias de muestreo
 const int ACCEL_FPS = 250; // 63 o 250 Hz
@@ -27,7 +34,7 @@ const double GYRO_DT = 1.0 / GYRO_FPS; // Solo para fines de testeo, se necesita
 // Gravedad
 const float GRAVITY = 9.78718;
 
-int main()
+int main(int argc, char *argv[])
 try
 {
     std::cout << "Estimación de pose" << std::endl;
@@ -61,22 +68,68 @@ try
     Eigen::Quaternion<double> quaternionAccelRel;
 
     // Vectores
+    // IMU
     Eigen::Vector3d vectorAccel(0.0, 0.0, 0.0);
-    Eigen::Vector3d vectorGravity(0.0, GRAVITY, 0.0); // Verificar dónde actúa la gravedad en el sensor
+    Eigen::Vector3d vectorGravity(0.0, GRAVITY, 0.0); // Verificar dónde actúa la gravedad en el sensor, en 'y'!
     Eigen::Vector3d vectorAccelRel(0.0, 0.0, 0.0);
 
+    // LIDAR
+    Eigen::VectorXd vectorDistanceActual(0);
+    Eigen::VectorXd vectorAngleActual(0);
+
+    Eigen::VectorXd vectorDistancePrevious(0);
+    Eigen::VectorXd vectorAnglePrevious(0);
+
+    // Eigen::VectorXd vectorDistanceDifference(0);
+    std::vector<double> vectorDistanceDifference;
+
+    double distanceDifferenceSum = 0;
+    float angleThreshold = 0.1;
+    float distanceThreshold = 0.1;
+    float standstillThreshold = 0.8;
+
+    // Sensores
+    std::cout << "Configurando sensores..." << std::endl;
+
+    // RPLIDAR S1
+    std::cout << "1) Estableciendo conexión al LIDAR..." << std::endl;
+
+    RPlidarDriver *lidar = RPlidarDriver::CreateDriver();
+    const char *devicePort = "/dev/ttyUSB0"; // or "COM3" for Windows
+    u_result result = lidar->connect(devicePort, 256000);
+
+    if (IS_FAIL(result))
+    {
+        std::cerr << "Fallo en la conexión al RPLIDAR S1" << std::endl;
+        return 1;
+    }
+
+    if (lidar->isConnected())
+        std::cout << "¡Conexión establecida al RPLIDAR S1!\n" << std::endl;
+
+    lidar->startMotor();
+
     // Realsense IMU config
+    std::cout << "2) Estableciendo conexión el IMU..." << std::endl;
     rs2::config cfg;
 
     cfg.enable_stream(RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F, ACCEL_FPS); // Acelerómetro
     cfg.enable_stream(RS2_STREAM_GYRO, RS2_FORMAT_MOTION_XYZ32F, GYRO_FPS);   // Giroscopio
     cfg.enable_stream(RS2_STREAM_DEPTH);
 
+    // TODO: Añadir manejo de errores en conexión con Realsense
+    std::cout << "¡Conexión establecida al IMU!\n" << std::endl;
+
     rs2::pipeline pipe;
 
-    std::mutex accel_mutex;
-    std::mutex gyro_mutex;
+    // std::mutex accel_mutex;
+    // std::mutex gyro_mutex;
     std::mutex filter_mutex;
+    std::mutex lidar_mutex;
+
+    // Procesamiento
+    std::cout << "Configuración lista. Presione una tecla para continuar: ";
+    std::cin.get();
 
     // RS2 Callback
     auto profile = pipe.start(cfg, [&](rs2::frame frame) {
@@ -105,64 +158,221 @@ try
         }
     });
 
-    // int iteration = 0;
-    // while (iteration < 5)
-    //     iteration++;
-    
-    int iteration = 0;
-    // while (iteration < 5)
+    // Ciclo de procesamiento
+    bool initPeriod = false;
+    bool initLidar = false;
+
+    const int bufferSize = 8192;
+    rplidar_response_measurement_node_hq_t nodes[bufferSize];
+
+    size_t nodeCount = _countof(nodes);
+    bool force = true; // Necesario para activar sensor
+
+    int iterations = 0;
+    // while (iterations < 10)
     while (true)
     {
-        if (iteration < 10)
+        iterations++;
+        // Periodo de inicialización, evita NaNs.
+        if (!initPeriod)
         {
-            iteration++;
-            continue;
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            initPeriod = true;
         }
 
-        // TODO: Arreglar tiempo inicialización del sensor
-        // std::this_thread::sleep_for(std::chrono::seconds(5));
+        // Sección IMU
+        std::cout << "Procesamiento de datos obtenidos del IMU" << std::endl;
         // Actualización del filtro complementario
         std::lock_guard<std::mutex> lock(filter_mutex);
         CF.update(accel_data.x, accel_data.y, accel_data.z, gyro_data.x, gyro_data.y, gyro_data.z, GYRO_DT);
-// 
+        //
         // Cuaternión resultante
         CF.getOrientation(q1, q1, q2, q3);
         quaternionRotCF.w() = q0;
-        quaternionRotCF.x() = q1;  
-        quaternionRotCF.y() = q2; 
+        quaternionRotCF.x() = q1;
+        quaternionRotCF.y() = q2;
         quaternionRotCF.z() = q3;
-// 
+        //
         // std::cout << "Cuaternión v1: (" << q0 << ", " << q1 << ", " << q2 << ", " << q3 << ")" << std::endl;
         // std::cout << "Cuaternión v2: \n(" << quaternionRotCF.coeffs() << ")" << std::endl;
         std::cout << std::fixed << std::setprecision(6) << "Cuaternión de rotación: \n(" << quaternionRotCF << ")"
                   << std::endl;
-// 
+        //
         // Calculamos conjugado
         quaternionRotCFConj = quaternionRotCF.conjugate();
-// 
+        //
         std::cout << "Cuaternión conjugado de rotación: \n" << quaternionRotCFConj << std::endl;
-// 
+        //
         // Cuaternión puro aceleración
-        std::cout << "Cuaternión puro de aceleración del sensor: \n" << "(" << accel_data.x << "," << accel_data.y << "," << accel_data.z
-        << ")" << std::endl; quaternionPureAccel.w() = 0;
+        std::cout << "Cuaternión puro de aceleración del sensor: \n"
+                  << "(" << accel_data.x << "," << accel_data.y << "," << accel_data.z << ")" << std::endl;
+        quaternionPureAccel.w() = 0;
         quaternionPureAccel.x() = accel_data.x;
         quaternionPureAccel.y() = accel_data.y;
         quaternionPureAccel.z() = accel_data.z;
-// 
+        //
         std::cout << "Cuaternión puro de aceleración:\n" << quaternionPureAccel << std::endl;
-// 
+        //
         // Vector aceleración
         // quaternionAccel = quaternionRotCF X quaternionPureAccel X quaternionRotCFConj
         quaternionAccel = quaternionRotCF * quaternionPureAccel * quaternionRotCFConj;
         vectorAccel << quaternionAccel.x(), quaternionAccel.y(), quaternionAccel.z();
-// 
+        //
         std::cout << "Vector aceleración:\n" << vectorAccel << std::endl;
-// 
+        //
         // Cuaternión aceleración relativa
         vectorAccelRel = vectorAccel - vectorGravity;
-        std::cout << "Vector aceleración relativa:\n" << vectorAccelRel << "\n" << std::endl;
-// 
+        std::cout << "Vector aceleración relativa:\n" << vectorAccelRel << std::endl;
+        //
         // G = [0 0 g]^T
+
+        // Sección LIDAR
+        std::cout << "Procesamiento de datos del LIDAR" << std::endl;
+
+        // Muestrea una ronda de información
+        lidar->startScanExpress(force, 1);                // 0 = Modo denso, 1 = modo simple
+        result = lidar->grabScanDataHq(nodes, nodeCount); // Guarda datos
+        // result = lidar->getScanDataWithIntervalHq(nodes, nodeCount); // Guarda datos, pero sale error!!
+        if (IS_FAIL(result))
+        {
+            std::cerr << "Error en datos del LIDAR con código: " << result << std::endl;
+            lidar->disconnect();
+            delete lidar;
+            return EXIT_FAILURE;
+        }
+
+        result = lidar->ascendScanData(nodes, nodeCount); // Ordena de menor a mayor
+        if (IS_FAIL(result))
+        {
+            // TODO: AVERIGUAR POR QUE FALLA, CHECAR types.h EN CARPETA hal
+            // DE LO CONTRARIO, IMPLEMENTAR FUNCION PARA EVALUAR FALLOS EN EL SENSOR.
+            std::cerr << "Error en datos del LIDAR con código: " << result << std::endl;
+            lidar->disconnect();
+            delete lidar;
+            return EXIT_FAILURE;
+        }
+
+        vectorDistanceActual.resize((int)nodeCount); // Ajusta tamaño
+        vectorAngleActual.resize((int)nodeCount);    // Ajusta tamaño
+
+        if (!initLidar)
+        {
+            vectorDistancePrevious.resize((int)nodeCount); // Ajusta tamaño
+            vectorAnglePrevious.resize((int)nodeCount);    // Ajusta tamaño
+            for (int pos = 0; pos < (int)nodeCount; ++pos)
+            {
+                // std::lock_guard<std::mutex> lock(lidar_mutex);
+                // Conversión de unidades
+                float angleDegrees = static_cast<float>(nodes[pos].angle_z_q14) * 90.f / (1 << 14);
+                float distanceMeters = static_cast<float>(nodes[pos].dist_mm_q2) / 10.f / (1 << 2);
+                // std::cout << "Distancia obtenida " << pos << ": " << distanceMeters << std::endl;
+                // std::cout << "Angulo obtenido " << pos << ": " << angleDegrees << std::endl;
+                vectorDistancePrevious[pos] = distanceMeters;
+                vectorAnglePrevious[pos] = angleDegrees;
+            }
+            std::cout << "Valores capturados por el LIDAR en t-1: " << vectorDistancePrevious.size() << std::endl;
+            initLidar = true;
+        }
+        else
+        {
+            for (int pos = 0; pos < (int)nodeCount; ++pos)
+            {
+                // std::lock_guard<std::mutex> lock(lidar_mutex);
+                // Conversión de unidades
+                float angleDegrees = static_cast<float>(nodes[pos].angle_z_q14) * 90.f / (1 << 14);
+                float distanceMeters = static_cast<float>(nodes[pos].dist_mm_q2) / 10.f / (1 << 2);
+                // std::cout << "Distancia obtenida " << pos << ": " << distanceMeters << std::endl;
+                // std::cout << "Angulo obtenido " << pos << ": " << angleDegrees << std::endl;
+                vectorDistanceActual[pos] = distanceMeters;
+                vectorAngleActual[pos] = angleDegrees;
+            }
+            std::cout << "Valores capturados por el LIDAR en t: " << vectorDistanceActual.size() << std::endl;
+
+            // Compara para ver si calcularon la distancia en el mismo ángulo de rotación
+            // std::cout << "Ángulos previos: \n" << vectorAnglePrevious.transpose() << std::endl;
+            // std::cout << "Ángulos actuales: \n" << vectorAngleActual.transpose() << std::endl;
+
+            int anglesMatched = 0;
+            int anglesMissing = 0;
+            int similarDistances = 0;
+            int notSimilarDistances = 0;
+            bool angleMatchFound = false;
+            bool distanceMatchFound = false;
+            distanceDifferenceSum = 0;
+
+            // Recorremos vector t-1
+            for (int i = 0; i < vectorAnglePrevious.size(); i++)
+            {
+                angleMatchFound = false;
+                distanceMatchFound = false;
+                // Recorremos vector t
+                for (int j = 0; j < vectorAngleActual.size(); j++)
+                {
+                    // Encontrar ángulo correspondiente entre t-1 y t
+                    if (abs(vectorAnglePrevious[i] - vectorAngleActual[j]) <= angleThreshold)
+                    {
+                        // Guardamos la diferencia entre las distancias detectadas bajo ese ángulo
+                        angleMatchFound = true;
+                        anglesMatched++;
+                        double difference = vectorDistancePrevious[i] - vectorDistanceActual[j];
+
+                        if (difference <= distanceThreshold)
+                        {
+                            distanceMatchFound = true;
+                            similarDistances++;
+                            vectorDistanceDifference.push_back(difference);
+                        }
+
+                        break;
+                    }
+                }
+                if (!angleMatchFound)
+                    anglesMissing++;
+
+                if (!distanceMatchFound)
+                    notSimilarDistances++;
+            }
+            std::cout << "Tamaño vector t-1: " << vectorDistancePrevious.size() << std::endl;
+            std::cout << "Tamaño vector t: " << vectorDistanceActual.size() << std::endl;
+
+            std::cout << "Ángulos en común encontrados: " << anglesMatched << std::endl;
+            std::cout << "Ángulos no encontrados: " << anglesMissing << std::endl;
+
+            std::cout << "Distancias dentro del umbral: " << similarDistances << std::endl;
+            std::cout << "Distancias fuera del umbral: " << notSimilarDistances << std::endl;
+
+            // Calculamos diferencias
+            distanceDifferenceSum =
+                std::accumulate(vectorDistanceDifference.begin(), vectorDistanceDifference.end(), 0);
+
+            std::cout << "Suma acumulada de diferencias: " << distanceDifferenceSum << std::endl;
+
+            // Determinamos si hubo desplazamiento
+            float temp = (float)similarDistances / ((float)vectorDistanceActual.size() - (float)anglesMissing);
+
+            if (temp > standstillThreshold)
+            {
+                std::cout << "Sistema en reposo con m = " << temp << "\n" << std::endl;
+            }
+            else
+            {
+                std::cout << "Sistema en movimiento con m = " << temp << "\n" << std::endl;
+            }
+
+            vectorDistanceDifference.clear(); // Limpia
+
+            // Actualizamos t-1 <- t
+            vectorDistancePrevious.setZero();
+            vectorAnglePrevious.setZero();
+            vectorDistancePrevious = vectorDistanceActual;
+            vectorAnglePrevious = vectorAngleActual;
+        }
+
+        // vectorDistancePrevious.resize((int)nodeCount);  // Ajusta tamaño
+        // vectorAnglePrevious.resize((int)nodeCount); // Ajusta tamaño
+
+        // vectorDistanceActual.setZero();
+        // vectorDistancePrevious.setZero();
 
         // Guardamos valores cuaternion
         // TODO: Revisar por qué está guardando más de
@@ -180,15 +390,16 @@ try
         // }
 
         // Calculamos posición
-
     }
 
     // Cerramos archivo
     // outfile.close();
 
-    // Paramos el pipeline RS2
-
+    // Paramos IMU
     pipe.stop();
+    // Paramos LIDAR
+    lidar->disconnect();
+    delete lidar;
 
     return EXIT_SUCCESS;
 }
