@@ -10,6 +10,7 @@ Realsense D435i.
 // #include <fstream>  // Descomentar lineas texto
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+#include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <librealsense2/rs.hpp>
@@ -33,6 +34,11 @@ const double GYRO_DT = 1.0 / GYRO_FPS; // Solo para fines de testeo, se necesita
 
 // Gravedad
 const float GRAVITY = 9.78718;
+
+// Histograma
+const int MAX_ANGLE = 360;
+const int HIST_SIZE = 1024;
+const double BIN_WIDTH = (float)MAX_ANGLE / (float)HIST_SIZE;
 
 int main(int argc, char *argv[])
 try
@@ -74,19 +80,16 @@ try
     Eigen::Vector3d vectorAccelRel(0.0, 0.0, 0.0);
 
     // LIDAR
-    Eigen::VectorXd vectorDistanceActual(0);
-    Eigen::VectorXd vectorAngleActual(0);
-
-    Eigen::VectorXd vectorDistancePrevious(0);
-    Eigen::VectorXd vectorAnglePrevious(0);
+    Eigen::VectorXd vectorHistDistanceActual(HIST_SIZE);
+    Eigen::VectorXd vectorHistDistancePrevious(HIST_SIZE);
 
     // Eigen::VectorXd vectorDistanceDifference(0);
     std::vector<double> vectorDistanceDifference;
 
     double distanceDifferenceSum = 0;
     float angleThreshold = 0.1;
-    float distanceThreshold = 0.1;
-    float standstillThreshold = 0.8;
+    float distanceThreshold = 0.5;
+    float standstillThreshold = 0.5;
 
     // Sensores
     std::cout << "Configurando sensores..." << std::endl;
@@ -252,13 +255,8 @@ try
             return EXIT_FAILURE;
         }
 
-        vectorDistanceActual.resize((int)nodeCount); // Ajusta tamaño
-        vectorAngleActual.resize((int)nodeCount);    // Ajusta tamaño
-
         if (!initLidar)
         {
-            vectorDistancePrevious.resize((int)nodeCount); // Ajusta tamaño
-            vectorAnglePrevious.resize((int)nodeCount);    // Ajusta tamaño
             for (int pos = 0; pos < (int)nodeCount; ++pos)
             {
                 // std::lock_guard<std::mutex> lock(lidar_mutex);
@@ -267,10 +265,15 @@ try
                 float distanceMeters = static_cast<float>(nodes[pos].dist_mm_q2) / 10.f / (1 << 2);
                 // std::cout << "Distancia obtenida " << pos << ": " << distanceMeters << std::endl;
                 // std::cout << "Angulo obtenido " << pos << ": " << angleDegrees << std::endl;
-                vectorDistancePrevious[pos] = distanceMeters;
-                vectorAnglePrevious[pos] = angleDegrees;
+                // vectorDistancePrevious[pos] = distanceMeters;
+                // vectorAnglePrevious[pos] = angleDegrees;
+
+                int binIndex = (int)ceil(angleDegrees / BIN_WIDTH) - 1;
+                if (binIndex < 0)
+                    binIndex++;
+                // std::cout << "binIndex: " << binIndex << " ";
+                vectorHistDistancePrevious[binIndex] = distanceMeters;
             }
-            std::cout << "Valores capturados por el LIDAR en t-1: " << vectorDistancePrevious.size() << std::endl;
             initLidar = true;
         }
         else
@@ -283,63 +286,62 @@ try
                 float distanceMeters = static_cast<float>(nodes[pos].dist_mm_q2) / 10.f / (1 << 2);
                 // std::cout << "Distancia obtenida " << pos << ": " << distanceMeters << std::endl;
                 // std::cout << "Angulo obtenido " << pos << ": " << angleDegrees << std::endl;
-                vectorDistanceActual[pos] = distanceMeters;
-                vectorAngleActual[pos] = angleDegrees;
+                // vectorDistanceActual[pos] = distanceMeters;
+                // vectorAngleActual[pos] = angleDegrees;
+
+                int binIndex = (int)ceil(angleDegrees / BIN_WIDTH) - 1;
+                if (binIndex < 0)
+                    binIndex++;
+                // std::cout << "binIndex: " << binIndex << " ";
+                vectorHistDistanceActual[binIndex] = distanceMeters;
             }
-            std::cout << "Valores capturados por el LIDAR en t: " << vectorDistanceActual.size() << std::endl;
 
             // Compara para ver si calcularon la distancia en el mismo ángulo de rotación
             // std::cout << "Ángulos previos: \n" << vectorAnglePrevious.transpose() << std::endl;
             // std::cout << "Ángulos actuales: \n" << vectorAngleActual.transpose() << std::endl;
 
-            int anglesMatched = 0;
-            int anglesMissing = 0;
-            int similarDistances = 0;
-            int notSimilarDistances = 0;
-            bool angleMatchFound = false;
-            bool distanceMatchFound = false;
+            int j = vectorHistDistanceActual.size();
+            int jFaulty = 0;
+            int jEpsilon = 0;
+
             distanceDifferenceSum = 0;
 
-            // Recorremos vector t-1
-            for (int i = 0; i < vectorAnglePrevious.size(); i++)
+            // Recorremos arreglos comparando elementos entre ambos
+            for (int i = 0; i < vectorHistDistanceActual.size(); i++)
             {
-                angleMatchFound = false;
-                distanceMatchFound = false;
-                // Recorremos vector t
-                for (int j = 0; j < vectorAngleActual.size(); j++)
-                {
-                    // Encontrar ángulo correspondiente entre t-1 y t
-                    if (abs(vectorAnglePrevious[i] - vectorAngleActual[j]) <= angleThreshold)
-                    {
-                        // Guardamos la diferencia entre las distancias detectadas bajo ese ángulo
-                        angleMatchFound = true;
-                        anglesMatched++;
-                        double difference = vectorDistancePrevious[i] - vectorDistanceActual[j];
+                // Valores t-1 y t
+                int val_previous = vectorHistDistancePrevious[i];
+                int val_actual = vectorHistDistanceActual[i];
 
+                if (val_previous == 0)
+                {
+                    // Ambos son cero
+                    if (val_actual == 0)
+                        j--; // Disminuimos longitud de elementos del histograma.
+                    else     // Uno es cero
+                        jFaulty++;
+                }
+                else
+                {
+                    // Uno es cero
+                    if (val_actual == 0)
+                        jFaulty++;
+                    else // Ambos son diferentes de cero -> Son comparables!
+                    {
+                        double difference = abs(val_previous - val_actual);
+                        // Si la diferencia es menor al umbral, la contabilizamos
                         if (difference <= distanceThreshold)
                         {
-                            distanceMatchFound = true;
-                            similarDistances++;
                             vectorDistanceDifference.push_back(difference);
+                            jEpsilon++;
                         }
-
-                        break;
                     }
                 }
-                if (!angleMatchFound)
-                    anglesMissing++;
-
-                if (!distanceMatchFound)
-                    notSimilarDistances++;
             }
-            std::cout << "Tamaño vector t-1: " << vectorDistancePrevious.size() << std::endl;
-            std::cout << "Tamaño vector t: " << vectorDistanceActual.size() << std::endl;
 
-            std::cout << "Ángulos en común encontrados: " << anglesMatched << std::endl;
-            std::cout << "Ángulos no encontrados: " << anglesMissing << std::endl;
-
-            std::cout << "Distancias dentro del umbral: " << similarDistances << std::endl;
-            std::cout << "Distancias fuera del umbral: " << notSimilarDistances << std::endl;
+            std::cout << "Tamaño del histograma: " << j << std::endl;
+            std::cout << "Distancias dentro del umbral: " << jEpsilon << std::endl;
+            std::cout << "Distancias con fallas: " << jFaulty << std::endl;
 
             // Calculamos diferencias
             distanceDifferenceSum =
@@ -348,24 +350,22 @@ try
             std::cout << "Suma acumulada de diferencias: " << distanceDifferenceSum << std::endl;
 
             // Determinamos si hubo desplazamiento
-            float temp = (float)similarDistances / ((float)vectorDistanceActual.size() - (float)anglesMissing);
+            float m = (float)jEpsilon / ((float)j - (float)jFaulty);
 
-            if (temp > standstillThreshold)
+            if (m > standstillThreshold)
             {
-                std::cout << "Sistema en reposo con m = " << temp << "\n" << std::endl;
+                std::cout << "Sistema en reposo     con m = " << m << "\n" << std::endl;
             }
             else
             {
-                std::cout << "Sistema en movimiento con m = " << temp << "\n" << std::endl;
+                std::cout << "Sistema en movimiento con m = " << m << "\n" << std::endl;
             }
 
             vectorDistanceDifference.clear(); // Limpia
 
-            // Actualizamos t-1 <- t
-            vectorDistancePrevious.setZero();
-            vectorAnglePrevious.setZero();
-            vectorDistancePrevious = vectorDistanceActual;
-            vectorAnglePrevious = vectorAngleActual;
+            // Actualiza histogramas Lidar t-1 <- t
+            vectorHistDistancePrevious = vectorHistDistanceActual;
+            vectorHistDistanceActual.setZero();
         }
 
         // vectorDistancePrevious.resize((int)nodeCount);  // Ajusta tamaño
