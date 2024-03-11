@@ -10,6 +10,7 @@ Realsense D435i.
 // #include <fstream>  // Descomentar lineas texto
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+#include <chrono>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
@@ -50,6 +51,9 @@ try
     // outfile.open("../valores_cuaternion.txt");
     // bool writeHeader = true;
 
+    // Tiempos
+    std::chrono::high_resolution_clock::time_point tStop;  // Reposo
+
     // Filtro complementario
     imu_tools::ComplementaryFilter CF;
     rs2_vector gyro_data, accel_data;
@@ -87,7 +91,6 @@ try
     std::vector<double> vectorDistanceDifference;
 
     double distanceDifferenceSum = 0;
-    float angleThreshold = 0.1;
     float distanceThreshold = 0.5;
     float standstillThreshold = 0.5;
 
@@ -354,7 +357,9 @@ try
 
             if (m > standstillThreshold)
             {
-                std::cout << "Sistema en reposo     con m = " << m << "\n" << std::endl;
+                tStop = std::chrono::high_resolution_clock::now();
+                std::cout << "Sistema en reposo     con m = " << m << std::endl;
+                std::cout << "tStop: " << tStop.time_since_epoch().count() << '\n' << std::endl;
             }
             else
             {
