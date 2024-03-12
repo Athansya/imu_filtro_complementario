@@ -52,7 +52,12 @@ try
     // bool writeHeader = true;
 
     // Tiempos
-    std::chrono::high_resolution_clock::time_point tStop;  // Reposo
+    std::chrono::high_resolution_clock::time_point timePrevious;
+    std::chrono::high_resolution_clock::time_point timeActual;
+    std::chrono::high_resolution_clock::time_point tStop; // Reposo
+    // std::chrono::duration<double, std::milli> timePassedSincePrevious;  // Milisegundos
+    std::chrono::duration<double> timePassedSincePrevious; // Segundos
+    double deltaTime = 0.0;
 
     // Filtro complementario
     imu_tools::ComplementaryFilter CF;
@@ -83,6 +88,14 @@ try
     Eigen::Vector3d vectorGravity(0.0, GRAVITY, 0.0); // Verificar dónde actúa la gravedad en el sensor, en 'y'!
     Eigen::Vector3d vectorAccelRel(0.0, 0.0, 0.0);
 
+    // Para integracion
+    Eigen::Vector3d vectorVelocity(0.0, 0.0, 0.0);
+    Eigen::Vector3d vectorVelocityInstant(0.0, 0.0, 0.0);
+    Eigen::Vector3d vectorPosition(0.0, 0.0, 0.0);
+
+    // Incertidumbre para corregir error de integración
+    Eigen::Vector3d vectorUncertainty(0.0, 0.0, 0.0);
+
     // LIDAR
     Eigen::VectorXd vectorHistDistanceActual(HIST_SIZE);
     Eigen::VectorXd vectorHistDistancePrevious(HIST_SIZE);
@@ -93,6 +106,9 @@ try
     double distanceDifferenceSum = 0;
     float distanceThreshold = 0.5;
     float standstillThreshold = 0.5;
+    int timesCompleteStandstill = 0;
+    int k = 1; // j durante fase de movimiento
+    bool calcularIncertidumbre = false;
 
     // Sensores
     std::cout << "Configurando sensores..." << std::endl;
@@ -167,6 +183,7 @@ try
     // Ciclo de procesamiento
     bool initPeriod = false;
     bool initLidar = false;
+    bool firstTime = false;
 
     const int bufferSize = 8192;
     rplidar_response_measurement_node_hq_t nodes[bufferSize];
@@ -184,13 +201,32 @@ try
         {
             std::this_thread::sleep_for(std::chrono::seconds(5));
             initPeriod = true;
+            // timePrevious = timePrevious.time_since_epoch().count();
+        }
+
+        // Calculamos paso temporal
+        if (!firstTime)
+        {
+            timePrevious = std::chrono::high_resolution_clock::now();
+            firstTime = true;
+        }
+        else
+        {
+            timeActual = std::chrono::high_resolution_clock::now();
+            timePassedSincePrevious = timeActual - timePrevious;
+            deltaTime = timePassedSincePrevious.count();
+            std::cout << "Delta Time: " << deltaTime << std::endl;
+            timePrevious = timeActual; // Actualizamos
         }
 
         // Sección IMU
         std::cout << "Procesamiento de datos obtenidos del IMU" << std::endl;
         // Actualización del filtro complementario
         std::lock_guard<std::mutex> lock(filter_mutex);
-        CF.update(accel_data.x, accel_data.y, accel_data.z, gyro_data.x, gyro_data.y, gyro_data.z, GYRO_DT);
+        if (!firstTime)
+            CF.update(accel_data.x, accel_data.y, accel_data.z, gyro_data.x, gyro_data.y, gyro_data.z, GYRO_DT);
+        else
+            CF.update(accel_data.x, accel_data.y, accel_data.z, gyro_data.x, gyro_data.y, gyro_data.z, deltaTime);
         //
         // Cuaternión resultante
         CF.getOrientation(q1, q1, q2, q3);
@@ -250,7 +286,6 @@ try
         result = lidar->ascendScanData(nodes, nodeCount); // Ordena de menor a mayor
         if (IS_FAIL(result))
         {
-            // TODO: AVERIGUAR POR QUE FALLA, CHECAR types.h EN CARPETA hal
             // DE LO CONTRARIO, IMPLEMENTAR FUNCION PARA EVALUAR FALLOS EN EL SENSOR.
             std::cerr << "Error en datos del LIDAR con código: " << result << std::endl;
             lidar->disconnect();
@@ -307,6 +342,8 @@ try
             int jFaulty = 0;
             int jEpsilon = 0;
 
+            // int k = 0; // j durante fase de movimiento, movido hasta arriba
+
             distanceDifferenceSum = 0;
 
             // Recorremos arreglos comparando elementos entre ambos
@@ -352,19 +389,66 @@ try
 
             std::cout << "Suma acumulada de diferencias: " << distanceDifferenceSum << std::endl;
 
-            // Determinamos si hubo desplazamiento
+            // Determinamos si hay movimiento
             float m = (float)jEpsilon / ((float)j - (float)jFaulty);
 
-            if (m > standstillThreshold)
+            if (m > standstillThreshold) // Fase estática
             {
                 tStop = std::chrono::high_resolution_clock::now();
                 std::cout << "Sistema en reposo     con m = " << m << std::endl;
-                std::cout << "tStop: " << tStop.time_since_epoch().count() << '\n' << std::endl;
+                std::cout << "tStop: " << tStop.time_since_epoch().count() << std::endl;
+                std::cout << "k: " << k << std::endl;
+                if (timesCompleteStandstill > 1 && k)
+                {
+                    // Calculamos v
+                    // 1) Obtener velocidad con error
+                    // vectorVelocity = vectorVelocity + (vectorAccelRel - vectorUncertainty) * deltaTime; // 1ra Integracion
+                    vectorVelocityInstant = vectorVelocityInstant + (vectorAccel - vectorUncertainty) * deltaTime; // 1ra Integracion
+                    // vectorPosition = vectorVelocity * deltaTime;
+
+                    // vectorUncertainty = vectorVelocityInstant / (deltaTime * k);
+
+                    std::cout << "Vector de velocidad: " << vectorVelocity.transpose() << std::endl;
+                    std::cout << "Vector de incertidumbre: " << vectorUncertainty.transpose() << '\n' << std::endl;
+                    calcularIncertidumbre = true;
+
+                    k++; // Longitud del histograma durante la fase de movimiento.
+                    // k = 1;
+                }
+                else
+                {
+                    std::cout << "Vector de velocidad corregida: " << vectorVelocity.transpose() << std::endl;
+                    std::cout << "Vector de posición corregida: " << vectorPosition.transpose() << '\n' << std::endl;
+                }
+                timesCompleteStandstill++; // Contamos veces en posición estática
+                std::cout << std::endl;
             }
-            else
+            else // Fase de movimiento
             {
-                std::cout << "Sistema en movimiento con m = " << m << "\n" << std::endl;
+                if (calcularIncertidumbre)
+                {
+                    vectorUncertainty = vectorUncertainty + (vectorVelocityInstant / (deltaTime * k));
+                    calcularIncertidumbre = false;
+                }
+
+                // k++; // Longitud del histograma durante la fase de movimiento.
+                std::cout << "Sistema en movimiento con m = " << m << std::endl;
+                std::cout << "k: " << k << std::endl;
+
+                // Calcular velocidad y posición
+                vectorVelocity = vectorVelocity + (vectorAccel - vectorUncertainty) * deltaTime; // 1ra Integracion
+                // vectorVelocity = vectorVelocity + (vectorAccelRel - vectorUncertainty) * deltaTime;
+                vectorPosition = vectorPosition + (vectorVelocity * deltaTime);
+
+                std::cout << "Vector de velocidad corregida: " << vectorVelocity.transpose() << std::endl;
+                std::cout << "Vector de posición corregida: " << vectorPosition.transpose() << '\n' << std::endl;
+
+                // Reinicia variables
+                timesCompleteStandstill = 0; // Reiniciamos contador
+                k = 1;
+                vectorVelocityInstant.setZero();
             }
+            std::cout << "Vector de posición corregida: " << vectorPosition.transpose() << '\n' << std::endl;
 
             vectorDistanceDifference.clear(); // Limpia
 
