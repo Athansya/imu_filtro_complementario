@@ -110,6 +110,12 @@ try
     int k = 1; // j durante fase de movimiento
     bool calcularIncertidumbre = false;
 
+    bool standstillStarted = false;
+    bool movementStarted = false;
+    bool standstillDetected = false;
+    bool movementDetected = false;
+    bool changeOfState = false;
+
     // Sensores
     std::cout << "Configurando sensores..." << std::endl;
 
@@ -394,60 +400,99 @@ try
 
             if (m > standstillThreshold) // Fase estática
             {
-                tStop = std::chrono::high_resolution_clock::now();
                 std::cout << "Sistema en reposo     con m = " << m << std::endl;
-                std::cout << "tStop: " << tStop.time_since_epoch().count() << std::endl;
-                std::cout << "k: " << k << std::endl;
-                if (timesCompleteStandstill > 1 && k)
-                {
-                    // Calculamos v
-                    // 1) Obtener velocidad con error
-                    // vectorVelocity = vectorVelocity + (vectorAccelRel - vectorUncertainty) * deltaTime; // 1ra Integracion
-                    vectorVelocityInstant = vectorVelocityInstant + (vectorAccel - vectorUncertainty) * deltaTime; // 1ra Integracion
-                    // vectorPosition = vectorVelocity * deltaTime;
+                // std::cout << "k: " << k << std::endl;
 
-                    // vectorUncertainty = vectorVelocityInstant / (deltaTime * k);
+                // Calculamos la velocidad con error
+                // vectorVelocityInstant = vectorVelocityInstant + (vectorAccel * deltaTime);
+                vectorVelocityInstant = vectorAccel * deltaTime; // 1ra Integracion
 
-                    std::cout << "Vector de velocidad: " << vectorVelocity.transpose() << std::endl;
-                    std::cout << "Vector de incertidumbre: " << vectorUncertainty.transpose() << '\n' << std::endl;
-                    calcularIncertidumbre = true;
+                if (!(changeOfState) && movementDetected)
+                    changeOfState = true;
 
-                    k++; // Longitud del histograma durante la fase de movimiento.
-                    // k = 1;
-                }
-                else
-                {
-                    std::cout << "Vector de velocidad corregida: " << vectorVelocity.transpose() << std::endl;
-                    std::cout << "Vector de posición corregida: " << vectorPosition.transpose() << '\n' << std::endl;
-                }
-                timesCompleteStandstill++; // Contamos veces en posición estática
-                std::cout << std::endl;
+                k = 1;
+                movementDetected = false;
             }
             else // Fase de movimiento
             {
-                if (calcularIncertidumbre)
+                // std::cout << "Sistema en movimiento con m = " << m << std::endl;
+                // std::cout << "k: " << k << std::endl;
+                movementDetected = true;
+                // Calculamos incertidumbre si ya hubo un cambio reposo -> movimiento -> reposo -> movimiento
+                if (changeOfState)
                 {
-                    vectorUncertainty = vectorUncertainty + (vectorVelocityInstant / (deltaTime * k));
-                    calcularIncertidumbre = false;
+                    // vectorUncertainty = vectorUncertainty + (vectorVelocityInstant / (deltaTime * k));
+                    vectorUncertainty = vectorVelocityInstant / (deltaTime * k);
+
+                    // Calcular velocidad y posición
+                    vectorVelocity = vectorVelocity + (vectorAccel - vectorUncertainty) * deltaTime; // 1ra Integracion
+                    // vectorVelocity = vectorVelocity + (vectorAccelRel - vectorUncertainty) * deltaTime;
+                    vectorPosition = vectorPosition + (vectorVelocity * deltaTime);
+                    std::cout << "Vector de velocidad corregida: " << vectorVelocity.transpose() << std::endl;
+                    std::cout << "Vector de posición corregida: " << vectorPosition.transpose() << '\n' << std::endl;
+                    
+                    // Reiniciamos 
+                    vectorVelocityInstant.setZero();
                 }
-
-                // k++; // Longitud del histograma durante la fase de movimiento.
-                std::cout << "Sistema en movimiento con m = " << m << std::endl;
-                std::cout << "k: " << k << std::endl;
-
-                // Calcular velocidad y posición
-                vectorVelocity = vectorVelocity + (vectorAccel - vectorUncertainty) * deltaTime; // 1ra Integracion
-                // vectorVelocity = vectorVelocity + (vectorAccelRel - vectorUncertainty) * deltaTime;
-                vectorPosition = vectorPosition + (vectorVelocity * deltaTime);
-
-                std::cout << "Vector de velocidad corregida: " << vectorVelocity.transpose() << std::endl;
-                std::cout << "Vector de posición corregida: " << vectorPosition.transpose() << '\n' << std::endl;
-
-                // Reinicia variables
-                timesCompleteStandstill = 0; // Reiniciamos contador
-                k = 1;
-                vectorVelocityInstant.setZero();
+                k++;
             }
+
+            // {
+                // tStop = std::chrono::high_resolution_clock::now();
+                // std::cout << "Sistema en reposo     con m = " << m << std::endl;
+                // std::cout << "tStop: " << tStop.time_since_epoch().count() << std::endl;
+                // std::cout << "k: " << k << std::endl;
+                // if (timesCompleteStandstill > 1)
+                // {
+                    // Calculamos v
+                    // 1) Obtener velocidad con error
+                    // vectorVelocity = vectorVelocity + (vectorAccelRel - vectorUncertainty) * deltaTime; // 1ra Integracion
+                    // vectorVelocityInstant = vectorVelocityInstant + (vectorAccel - vectorUncertainty) * deltaTime; // 1ra Integracion
+                    // vectorPosition = vectorVelocity * deltaTime;
+// 
+                    // vectorUncertainty = vectorVelocityInstant / (deltaTime * k);
+// 
+                    // std::cout << "Vector de velocidad: " << vectorVelocity.transpose() << std::endl;
+                    // std::cout << "Vector de incertidumbre: " << vectorUncertainty.transpose() << '\n' << std::endl;
+                    // calcularIncertidumbre = true;
+// 
+                    // k++; // Longitud del histograma durante la fase de movimiento.
+                    //  1;
+                // }
+                // else
+                // {
+                    // std::cout << "Vector de velocidad corregida: " << vectorVelocity.transpose() << std::endl;
+                    // std::cout << "Vector de posición corregida: " << vectorPosition.transpose() << '\n' << std::endl;
+                // }
+                // timesCompleteStandstill++; // Contamos veces en posición estática
+                // std::cout << std::endl;
+            // }
+            // else // Fase de movimiento
+            // {
+                // if (calcularIncertidumbre)
+                // {
+                    // vectorUncertainty = vectorUncertainty + (vectorVelocityInstant / (deltaTime * k));
+                    // vectorUncertainty = vectorVelocityInstant / (deltaTime * k);
+                    // calcularIncertidumbre = false;
+                // }
+// 
+                // k++; // Longitud del histograma durante la fase de movimiento.
+                // std::cout << "Sistema en movimiento con m = " << m << std::endl;
+                // std::cout << "k: " << k << std::endl;
+// 
+                // Calcular velocidad y posición
+                // vectorVelocity = vectorVelocity + (vectorAccel - vectorUncertainty) * deltaTime; // 1ra Integracion
+                // vectorVelocity = vectorVelocity + (vectorAccelRel - vectorUncertainty) * deltaTime;
+                // vectorPosition = vectorPosition + (vectorVelocity * deltaTime);
+// 
+                // std::cout << "Vector de velocidad corregida: " << vectorVelocity.transpose() << std::endl;
+                // std::cout << "Vector de posición corregida: " << vectorPosition.transpose() << '\n' << std::endl;
+// 
+                // Reinicia variables
+                // timesCompleteStandstill = 0; // Reiniciamos contador
+                // k = 1;
+                // vectorVelocityInstant.setZero();
+            // }
             std::cout << "Vector de posición corregida: " << vectorPosition.transpose() << '\n' << std::endl;
 
             vectorDistanceDifference.clear(); // Limpia
